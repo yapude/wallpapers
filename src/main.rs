@@ -4,7 +4,7 @@ mod wallpaperflare;
 use std::collections::HashSet;
 use std::path::Path;
 
-const CDN_BASE_SKYLINE: &str = "https://raw.githubusercontent.com/yap02417-create/site-archive/main/skyline";
+const CDN_BASE: &str = "https://raw.githubusercontent.com/yapude/wallpapers/main/assets";
 
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
@@ -33,7 +33,7 @@ async fn main() {
         let mtx = md_mutex.clone();
         let tag = tag.to_string();
         tasks.push(tokio::spawn(async move {
-            scrape_source("skyline", "README.md", Some(&tag), u32::MAX, sem, mtx).await;
+            scrape_source("assets", "README.md", Some(&tag), u32::MAX, sem, mtx).await;
         }));
     }
 
@@ -41,7 +41,7 @@ async fn main() {
     futures::future::join_all(tasks).await;
 
     if std::env::var("GITHUB_ACTIONS").is_ok() {
-        let _ = std::process::Command::new("git").args(["add", "README.md", "skyline"]).status();
+        let _ = std::process::Command::new("git").args(["add", "README.md", "assets"]).status();
         let _ = std::process::Command::new("git").args(["commit", "-m", "chore: sort readme alphabetically [skip ci]"]).status();
         let _ = std::process::Command::new("git").args(["push"]).status();
     }
@@ -190,7 +190,7 @@ async fn scrape_source(
                         total_downloaded += 1;
                         page_downloaded += 1;
 
-                        let cdn_url = format!("{}/{}", CDN_BASE_SKYLINE, filename);
+                        let cdn_url = format!("{}/{}", CDN_BASE, filename);
                         let tags = item.tags.join(", ");
                         new_readme_rows.push_str(&format!(
                             "| <img src=\"{}\" width=\"200\"> | **{}**<br>[Download]({}) | {} |\n",
