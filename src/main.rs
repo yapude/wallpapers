@@ -4,7 +4,7 @@ mod wallpaperflare;
 use std::collections::HashSet;
 use std::path::Path;
 
-const RELATIVE_BASE_FLARE: &str = "skyline";
+const CDN_BASE_SKYLINE: &str = "https://raw.githubusercontent.com/yap02417-create/site-archive/main/skyline";
 
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
@@ -139,7 +139,6 @@ async fn scrape_source(
                     }
                     existing_ids.insert(slug.clone());
 
-                    let source_name = source_name.to_string();
                     let output_dir = output_dir.to_path_buf();
                     let max_retries = max_retries;
                     let sem = dl_semaphore.clone();
@@ -184,18 +183,18 @@ async fn scrape_source(
                 let results = futures::future::join_all(download_tasks).await;
                 
                 for res in results {
-                    if let Ok(Ok((slug, ext, item, filename, bytes))) = res {
+                    if let Ok(Ok((_, _, item, filename, bytes))) = res {
                         if bytes > 0 {
                             println!("ok ({} KB)", bytes / 1024);
                         }
                         total_downloaded += 1;
                         page_downloaded += 1;
 
-                        let img_rel_path = format!("{}/{}", source_name, filename);
+                        let cdn_url = format!("{}/{}", CDN_BASE_SKYLINE, filename);
                         let tags = item.tags.join(", ");
                         new_readme_rows.push_str(&format!(
                             "| <img src=\"{}\" width=\"200\"> | **{}**<br>[Download]({}) | {} |\n",
-                            img_rel_path, item.title, img_rel_path, tags
+                            cdn_url, item.title, cdn_url, tags
                         ));
                     } else {
                         total_failed += 1;
@@ -263,6 +262,7 @@ fn append_to_readme(md_file: &str, rows: &str) {
     }
 }
 
+#[allow(dead_code)]
 fn sort_readme(md_file: &str) {
     let content = match std::fs::read_to_string(md_file) {
         Ok(c) => c,
