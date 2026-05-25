@@ -4,8 +4,7 @@ mod wallpaperflare;
 use std::collections::HashSet;
 use std::path::Path;
 
-const CDN_BASE_CLAN: &str = "https://raw.githubusercontent.com/yap02417-create/site-archive/main/wallpapersclan";
-const CDN_BASE_FLARE: &str = "https://raw.githubusercontent.com/yap02417-create/site-archive/main/wallpaperflare";
+const RELATIVE_BASE_FLARE: &str = "skyline";
 
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
@@ -25,6 +24,7 @@ async fn main() {
         "wuthering waves",
         "artwork",
         "space",
+        "anime sexy",
     ];
 
     let mut tasks = Vec::new();
@@ -33,26 +33,18 @@ async fn main() {
         let mtx = md_mutex.clone();
         let tag = tag.to_string();
         tasks.push(tokio::spawn(async move {
-            scrape_source("wallpaperflare", CDN_BASE_FLARE, "wallpaperflare.md", Some(&tag), u32::MAX, sem, mtx).await;
+            scrape_source("skyline", "README.md", Some(&tag), u32::MAX, sem, mtx).await;
         }));
     }
-
-    // scrape wallpapersclan (no specific tags)
-    let sem = dl_semaphore.clone();
-    let mtx = md_mutex.clone();
-    tasks.push(tokio::spawn(async move {
-        scrape_source("wallpapersclan", CDN_BASE_CLAN, "README.md", None, u32::MAX, sem, mtx).await;
-    }));
 
     // Wait for all tag scraping tasks to finish
     futures::future::join_all(tasks).await;
 
     // sort the readmes at the end
     sort_readme("README.md");
-    sort_readme("wallpaperflare.md");
     
     if std::env::var("GITHUB_ACTIONS").is_ok() {
-        let _ = std::process::Command::new("git").args(["add", "--sparse", "README.md", "wallpaperflare.md", "wallpapersclan", "wallpaperflare"]).status();
+        let _ = std::process::Command::new("git").args(["add", "--sparse", "README.md", "skyline"]).status();
         let _ = std::process::Command::new("git").args(["commit", "-m", "chore: sort readme alphabetically [skip ci]"]).status();
         let _ = std::process::Command::new("git").args(["push"]).status();
     }
@@ -62,7 +54,6 @@ async fn main() {
 
 async fn scrape_source(
     source_name: &str,
-    cdn_base: &str,
     md_file: &str,
     search_query: Option<&str>,
     max_pages: u32,
@@ -88,8 +79,7 @@ async fn scrape_source(
     {
         let _lock = md_mutex.lock().await;
         if !Path::new(md_file).exists() {
-            let title = if source_name == "wallpapersclan" { "Wallpaper Archive" } else { "Wallpaper Flare Archive" };
-            let header = format!("# {}\n\nAutomated archive of wallpapers to bypass Cloudflare and prevent dead links.\n\n## Gallery\n\n| Preview | Title | Tags |\n| --- | --- | --- |\n", title);
+            let header = "# Wallpaper Archive\n\nAutomated archive of wallpapers to bypass Cloudflare and prevent dead links.\n\n## Gallery\n\n| Preview | Title | Tags |\n| --- | --- | --- |\n".to_string();
             let _ = std::fs::write(md_file, header);
         }
     }
@@ -156,7 +146,6 @@ async fn scrape_source(
                     }
                     existing_ids.insert(slug.clone());
 
-                    let cdn_base = cdn_base.to_string();
                     let source_name = source_name.to_string();
                     let output_dir = output_dir.to_path_buf();
                     let max_retries = max_retries;
@@ -180,11 +169,7 @@ async fn scrape_source(
                         print!("  [dl] {} ... ", filename);
                         
                         for dl_attempt in 1..=max_retries {
-                            let dl_res = match source_name.as_str() {
-                                "wallpapersclan" => wallpapersclan::download_wallpaper(&item.download_url, &filepath).await,
-                                "wallpaperflare" => wallpaperflare::download_wallpaper(&item.download_url, &filepath).await,
-                                _ => panic!("unknown source"),
-                            };
+                            let dl_res = wallpaperflare::download_wallpaper(&item.download_url, &filepath).await;
 
                             match dl_res {
                                 Ok(bytes) => return Ok((slug, ext, item, filename, bytes)),
@@ -213,11 +198,11 @@ async fn scrape_source(
                         total_downloaded += 1;
                         page_downloaded += 1;
 
-                        let cdn_url = format!("{}/{}.{}", cdn_base, slug, ext);
+                        let img_rel_path = format!("{}/{}", source_name, filename);
                         let tags = item.tags.join(", ");
                         new_readme_rows.push_str(&format!(
                             "| <img src=\"{}\" width=\"200\"> | **{}**<br>[Download]({}) | {} |\n",
-                            cdn_url, item.title, cdn_url, tags
+                            img_rel_path, item.title, img_rel_path, tags
                         ));
                     } else {
                         total_failed += 1;
