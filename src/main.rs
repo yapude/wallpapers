@@ -102,11 +102,7 @@ async fn scrape_source(
         let mut attempt = 0;
         let result = loop {
             attempt += 1;
-            let scrape_res = match source_name {
-                "wallpapersclan" => wallpapersclan::scrape_wallpapersclan(12, page).await,
-                "wallpaperflare" => wallpaperflare::scrape_wallpaperflare(12, page, search_query).await,
-                _ => panic!("unknown source"),
-            };
+            let scrape_res = wallpaperflare::scrape_wallpaperflare(12, page, search_query).await;
 
             match scrape_res {
                 Ok(items) => break Ok(items),
