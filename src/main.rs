@@ -259,11 +259,12 @@ fn load_existing_ids(source_name: &str, md_file: &str) -> HashSet<String> {
 }
 
 fn append_to_readme(md_file: &str, rows: &str) {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
-    if let Ok(mut file) = OpenOptions::new().append(true).open(md_file) {
-        let _ = file.write_all(rows.as_bytes());
+    // read existing content, trim trailing whitespace to avoid blank lines
+    // breaking the markdown table, then append rows directly after
+    if let Ok(existing) = std::fs::read_to_string(md_file) {
+        let trimmed = existing.trim_end();
+        let new_content = format!("{}\n{}", trimmed, rows);
+        let _ = std::fs::write(md_file, new_content);
         println!("appended {} new entries to {}", rows.lines().count(), md_file);
     }
 }
