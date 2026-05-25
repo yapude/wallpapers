@@ -75,9 +75,15 @@ async fn scrape_source(
 
     {
         let _lock = md_mutex.lock().await;
+        let header = "# Wallpaper Archive\n\nAutomated archive of wallpapers to bypass Cloudflare and prevent dead links.\n\n## Gallery\n\n| Preview | Title | Tags |\n| --- | --- | --- |\n";
         if !Path::new(md_file).exists() {
-            let header = "# Wallpaper Archive\n\nAutomated archive of wallpapers to bypass Cloudflare and prevent dead links.\n\n## Gallery\n\n| Preview | Title | Tags |\n| --- | --- | --- |\n".to_string();
             let _ = std::fs::write(md_file, header);
+        } else {
+            // make sure the table header exists in the file
+            let content = std::fs::read_to_string(md_file).unwrap_or_default();
+            if !content.contains("| --- | --- | --- |") {
+                let _ = std::fs::write(md_file, format!("{}{}", header, content));
+            }
         }
     }
 
