@@ -40,11 +40,8 @@ async fn main() {
     // Wait for all tag scraping tasks to finish
     futures::future::join_all(tasks).await;
 
-    // sort the readmes at the end
-    sort_readme("README.md");
-    
     if std::env::var("GITHUB_ACTIONS").is_ok() {
-        let _ = std::process::Command::new("git").args(["add", "--sparse", "README.md", "skyline"]).status();
+        let _ = std::process::Command::new("git").args(["add", "README.md", "skyline"]).status();
         let _ = std::process::Command::new("git").args(["commit", "-m", "chore: sort readme alphabetically [skip ci]"]).status();
         let _ = std::process::Command::new("git").args(["push"]).status();
     }
@@ -214,7 +211,7 @@ async fn scrape_source(
                     append_to_readme(md_file, &new_readme_rows);
                     if std::env::var("GITHUB_ACTIONS").is_ok() {
                         println!("[ci] committing progress for {} page {}...", source_name, page);
-                        let _ = std::process::Command::new("git").args(["add", "--sparse", md_file, source_name]).status();
+                        let _ = std::process::Command::new("git").args(["add", md_file, source_name]).status();
                         let _ = std::process::Command::new("git")
                             .args(["commit", "-m", &format!("chore: archive {} page {} ({} new) [skip ci]", source_name, page, page_downloaded)])
                             .status();
