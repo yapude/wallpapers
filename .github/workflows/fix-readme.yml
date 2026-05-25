@@ -1,0 +1,46 @@
+name: Fix README
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (sparse - readme only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            README.md
+          sparse-checkout-cone-mode: false
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Nuke README to header only
+        run: |
+          # wipe readme to just the table header so the scraper rebuilds it from scratch
+          cat > README.md << 'EOF'
+          # Wallpaper Archive
+
+          Automated archive of wallpapers to bypass Cloudflare and prevent dead links.
+
+          ## Gallery
+
+          | Preview | Title | Tags |
+          | --- | --- | --- |
+          EOF
+          # strip leading whitespace from heredoc
+          sed -i 's/^          //' README.md
+          echo "README.md reset to empty header"
+          cat README.md
+
+      - name: Commit and Push
+        run: |
+          git add --sparse README.md
+          git diff --cached --quiet && echo "no changes" || (git commit -m "fix: nuke readme for full rescrape [skip ci]" && git push)

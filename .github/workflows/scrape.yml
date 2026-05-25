@@ -1,0 +1,57 @@
+name: Daily Wallpaper Archive
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 760
+
+    steps:
+      - name: Checkout (sparse - code only, no images)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            src
+            Cargo.toml
+            Cargo.lock
+            .github
+            .gitignore
+            LICENSE
+            README.md
+            wallpaperflare.md
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install dependencies for BoringSSL
+        run: sudo apt-get update && sudo apt-get install -y cmake nasm clang
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Build and Run Scraper
+        run: |
+          cargo run --release --bin scrape

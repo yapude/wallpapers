@@ -1,0 +1,355 @@
+use scraper::{Html, Selector};
+use std::collections::HashSet;
+use std::path::Path;
+use wreq_util::Emulation;
+
+use crate::wallpapersclan::WallpaperEntry;
+
+fn build_client() -> Result<wreq::Client, String> {
+    use wreq::header::{HeaderMap, HeaderValue};
+    let mut headers = HeaderMap::new();
+    headers.insert("accept", HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
+    headers.insert("accept-encoding", HeaderValue::from_static("gzip, deflate, br, zstd"));
+    headers.insert("accept-language", HeaderValue::from_static("en-US,en;q=0.9,hi;q=0.8,de;q=0.7,ja;q=0.6"));
+    headers.insert("cache-control", HeaderValue::from_static("max-age=0"));
+    headers.insert("dnt", HeaderValue::from_static("1"));
+    headers.insert("priority", HeaderValue::from_static("u=0, i"));
+    headers.insert("sec-ch-ua", HeaderValue::from_static(r#""Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99""#));
+    headers.insert("sec-ch-ua-mobile", HeaderValue::from_static("?0"));
+    headers.insert("sec-ch-ua-platform", HeaderValue::from_static(r#""Windows""#));
+    headers.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+    headers.insert("sec-fetch-mode", HeaderValue::from_static("navigate"));
+    headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+    headers.insert("sec-fetch-user", HeaderValue::from_static("?1"));
+    headers.insert("upgrade-insecure-requests", HeaderValue::from_static("1"));
+    headers.insert("user-agent", HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"));
+
+    wreq::Client::builder()
+        .emulation(wreq_util::Emulation::Chrome134)
+        .default_headers(headers)
+        .cookie_store(true)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+// url normalization
+pub fn absolute_url(href: &str, base: &str) -> String {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        href.to_string()
+    } else if href.starts_with("//") {
+        format!("https:{}", href)
+    } else if href.starts_with('/') {
+        format!("{}{}", base.trim_end_matches('/'), href)
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), href)
+    }
+}
+
+pub fn pick_image_source(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    let first_segment = value.split(',').next().unwrap_or("").trim();
+    first_segment
+        .trim_start_matches("url(\"")
+        .trim_start_matches("url('")
+        .trim_start_matches("url(")
+        .trim_end_matches("\")")
+        .trim_end_matches("')")
+        .trim_end_matches(")")
+        .to_string()
+}
+
+pub async fn scrape_wallpaperflare(
+    limit: usize,
+    page: u32,
+) -> Result<Vec<WallpaperEntry>, String> {
+    println!(
+        "[scraper:wallpaperflare] starting scrape - page: {}, limit: {}",
+        page, limit
+    );
+    
+    let client = build_client()?;
+
+    let url = if page > 1 {
+        format!(
+            "https://www.wallpaperflare.com/index.php?page={}",
+            page
+        )
+    } else {
+        "https://www.wallpaperflare.com/".to_string()
+    };
+
+    println!("[scraper:wallpaperflare] fetching: {}", url);
+
+    let response = client
+        .get(&url)
+        .header("Referer", "https://www.wallpaperflare.com/")
+        .header("Sec-Fetch-Site", "same-origin")
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("http {} - possibly cloudflare blocked", status));
+    }
+
+    let html = response.text().await.map_err(|e| e.to_string())?;
+    
+    if html.contains("cf-browser-verification") || html.contains("Checking your browser") {
+        println!("[scraper:wallpaperflare] cloudflare challenge detected!");
+        return Err("cloudflare challenge - browser verification required".to_string());
+    }
+
+    let mut temp_items = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    {
+        let document = Html::parse_document(&html);
+        let li_selector = Selector::parse("li[itemprop=\"associatedMedia\"]").unwrap();
+        let link_selector = Selector::parse("a[itemprop=\"url\"]").unwrap();
+        let img_selector = Selector::parse("img[itemprop=\"contentUrl\"]").unwrap();
+        let keywords_selector = Selector::parse("meta[itemprop=\"keywords\"]").unwrap();
+
+        for li_element in document.select(&li_selector) {
+            if temp_items.len() >= limit {
+                break;
+            }
+
+            let link_element = match li_element.select(&link_selector).next() {
+                Some(el) => el,
+                None => continue,
+            };
+
+            let href = link_element.value().attr("href").unwrap_or("");
+            if href.is_empty()
+                || href.starts_with('#')
+                || href.starts_with("/search")
+                || href.starts_with("/tag")
+                || href.starts_with("/page")
+                || href == "/"
+                || !href.contains("wallpaper")
+            {
+                continue;
+            }
+
+            let normalized_href = absolute_url(href, "https://www.wallpaperflare.com");
+            if !normalized_href.to_lowercase().contains("wallpaper") {
+                continue;
+            }
+
+            let media_elem = match link_element.select(&img_selector).next() {
+                Some(el) => el,
+                None => continue,
+            };
+            let thumb = media_elem
+                .value()
+                .attr("data-src")
+                .or_else(|| media_elem.value().attr("data-original"))
+                .or_else(|| media_elem.value().attr("data-srcset"))
+                .or_else(|| media_elem.value().attr("srcset"))
+                .or_else(|| media_elem.value().attr("src"))
+                .map(pick_image_source)
+                .unwrap_or_default();
+
+            if thumb.is_empty() {
+                continue;
+            }
+
+            let id = href
+                .trim_start_matches('/')
+                .split('-')
+                .next_back()
+                .unwrap_or("")
+                .to_string();
+
+            if id.is_empty() || id.len() < 3 || seen_ids.contains(&id) {
+                continue;
+            }
+            seen_ids.insert(id.clone());
+
+            let thumbnail_url = absolute_url(&thumb, "https://www.wallpaperflare.com");
+            let title = media_elem
+                .value()
+                .attr("alt")
+                .or_else(|| media_elem.value().attr("title"))
+                .unwrap_or("WallpaperFlare Wallpaper")
+                .to_string();
+
+            let tags = li_element
+                .select(&keywords_selector)
+                .next()
+                .and_then(|el| el.value().attr("content"))
+                .map(|content| {
+                    content
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+
+            temp_items.push((id, title, thumbnail_url, normalized_href, tags));
+        }
+    }
+
+    if temp_items.is_empty() {
+        println!("[scraper:wallpaperflare] no items found");
+        return Err("wallpaperflare returned no results".to_string());
+    }
+
+    println!(
+        "[scraper:wallpaperflare] collected {} items, resolving download urls...",
+        temp_items.len()
+    );
+
+    let mut handles = Vec::new();
+    let mut delay_ms = 0;
+    for (id, title, thumb, detail_url, tags) in temp_items {
+        let client = client.clone();
+        let detail = detail_url.clone();
+        
+        delay_ms += 1000;
+        let delay = std::time::Duration::from_millis(delay_ms);
+        
+        handles.push(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let download_url = resolve_wallpaperflare_download(&client, &detail).await;
+            (id, title, thumb, detail_url, download_url, tags)
+        }));
+    }
+
+    let mut items = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok((id, title, thumbnail_url, detail_url, download_result, tags)) => {
+                let download_url = match download_result {
+                    Ok(url) => url,
+                    Err(e) => {
+                        println!("  [warn] failed to resolve {}: {}", id, e);
+                        thumbnail_url.clone()
+                    }
+                };
+
+                items.push(WallpaperEntry {
+                    id: format!("wallpaperflare-{}", id),
+                    title,
+                    thumbnail_url,
+                    detail_url,
+                    download_url,
+                    tags,
+                });
+            }
+            Err(e) => {
+                println!("  [warn] task failed: {}", e);
+            }
+        }
+    }
+
+    println!("[scraper:wallpaperflare] resolved {} download urls", items.len());
+    Ok(items)
+}
+
+pub async fn resolve_wallpaperflare_download(
+    client: &wreq::Client,
+    detail_url: &str,
+) -> Result<String, String> {
+    let absolute = absolute_url(detail_url, "https://www.wallpaperflare.com");
+    let download_page_url = format!("{}/download", absolute.trim_end_matches('/'));
+
+    if let Ok(response) = client
+        .get(&download_page_url)
+        .header("Referer", &absolute)
+        .send()
+        .await
+    {
+        if let Ok(html) = response.text().await {
+            let document = Html::parse_document(&html);
+            let show_img_selector = Selector::parse("#show_img").unwrap();
+            let content_url_selector = Selector::parse("img[itemprop=\"contentUrl\"]").unwrap();
+            
+            let high_res_image = document
+                .select(&show_img_selector)
+                .next()
+                .and_then(|el| el.value().attr("src"))
+                .or_else(|| {
+                    document
+                        .select(&content_url_selector)
+                        .next()
+                        .and_then(|el| el.value().attr("src"))
+                });
+            
+            if let Some(img_url) = high_res_image {
+                let final_url = absolute_url(img_url, "https://www.wallpaperflare.com");
+                return Ok(final_url);
+            }
+        }
+    }
+
+    match client.get(&absolute)
+        .header("Referer", "https://www.wallpaperflare.com/")
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let html = response.text().await.map_err(|e| e.to_string())?;
+            let document = Html::parse_document(&html);
+            let content_url_selector = Selector::parse("img[itemprop=\"contentUrl\"]").unwrap();
+            let vimg_selector = Selector::parse("#vimg").unwrap();
+            let og_image_selector = Selector::parse("meta[property=\"og:image\"]").unwrap();
+            
+            let detail_image = document
+                .select(&content_url_selector)
+                .next()
+                .and_then(|el| el.value().attr("src"))
+                .map(pick_image_source)
+                .or_else(|| {
+                    document
+                        .select(&vimg_selector)
+                        .next()
+                        .and_then(|el| el.value().attr("src"))
+                        .map(pick_image_source)
+                })
+                .or_else(|| {
+                    document
+                        .select(&og_image_selector)
+                        .next()
+                        .and_then(|el| el.value().attr("content"))
+                        .map(pick_image_source)
+                });
+            
+            if let Some(img_url) = detail_image {
+                let final_url = absolute_url(&img_url, "https://www.wallpaperflare.com");
+                return Ok(final_url);
+            }
+            
+            Err("no image found on detail page".to_string())
+        }
+        Err(e) => Err(format!("failed to fetch detail page: {}", e)),
+    }
+}
+
+pub async fn download_wallpaper(url: &str, path: &Path) -> Result<u64, String> {
+    let client = build_client()?;
+
+    let response = client
+        .get(url)
+        .header("Referer", "https://www.wallpaperflare.com/")
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("download request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("http {}", response.status()));
+    }
+
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let len = bytes.len() as u64;
+
+    std::fs::write(path, &bytes).map_err(|e| format!("write failed: {}", e))?;
+
+    Ok(len)
+}
