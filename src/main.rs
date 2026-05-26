@@ -25,6 +25,9 @@ async fn main() {
         "artwork",
         "space",
         "anime sexy",
+        "blue archive",
+        "video games",
+        
     ];
 
     let mut tasks = Vec::new();
