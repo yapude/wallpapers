@@ -27,6 +27,7 @@ async fn main() {
         "anime sexy",
         "blue archive",
         "video games",
+        "ecchi",
         
     ];
 
