@@ -1,7 +1,6 @@
 use scraper::{Html, Selector};
 use std::collections::HashSet;
 use std::path::Path;
-use wreq_util::Emulation;
 
 use crate::wallpapersclan::WallpaperEntry;
 
@@ -213,13 +212,9 @@ pub async fn scrape_wallpaperflare(
     );
 
     let mut handles = Vec::new();
-    let mut delay_ms = 0;
     for (id, title, thumb, detail_url, tags) in temp_items {
         let client = client.clone();
         let detail = detail_url.clone();
-        
-        delay_ms += 1000;
-        let delay = std::time::Duration::from_millis(delay_ms);
         
         handles.push(tokio::spawn(async move {
             let download_url = resolve_wallpaperflare_download(&client, &detail).await;
@@ -338,6 +333,8 @@ pub async fn resolve_wallpaperflare_download(
 }
 
 pub async fn download_wallpaper(url: &str, path: &Path) -> Result<u64, String> {
+    const MAX_FILE_SIZE: u64 = 30 * 1024 * 1024;
+
     let client = build_client()?;
 
     let response = client
@@ -352,8 +349,28 @@ pub async fn download_wallpaper(url: &str, path: &Path) -> Result<u64, String> {
         return Err(format!("http {}", response.status()));
     }
 
+    // bail early using content-length header — no need to download 140 mb of garbage
+    if let Some(cl) = response.content_length() {
+        if cl > MAX_FILE_SIZE {
+            return Err(format!(
+                "file too large ({:.2} MB, limit is {} MB) — skipping",
+                cl as f64 / (1024.0 * 1024.0),
+                MAX_FILE_SIZE / (1024 * 1024)
+            ));
+        }
+    }
+
     let bytes = response.bytes().await.map_err(|e| e.to_string())?;
     let len = bytes.len() as u64;
+
+    // safety net in case content-length header was missing or lied
+    if len > MAX_FILE_SIZE {
+        return Err(format!(
+            "file too large ({:.2} MB, limit is {} MB) — skipping",
+            len as f64 / (1024.0 * 1024.0),
+            MAX_FILE_SIZE / (1024 * 1024)
+        ));
+    }
 
     std::fs::write(path, &bytes).map_err(|e| format!("write failed: {}", e))?;
 
