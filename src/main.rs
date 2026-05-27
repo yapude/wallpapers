@@ -7,7 +7,7 @@ use std::path::Path;
 const CDN_BASE: &str = "https://raw.githubusercontent.com/yapude/wallpapers/main/assets";
 
 use std::sync::Arc;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, Semaphore, mpsc};
 
 #[tokio::main]
 async fn main() {
@@ -16,6 +16,16 @@ async fn main() {
     // Global limits and locks
     let dl_semaphore = Arc::new(Semaphore::new(30)); // max 30 concurrent downloads across all tags
     let md_mutex = Arc::new(Mutex::new(()));
+
+    // Background push coalescer to prevent git push spam/zombies
+    let (push_tx, mut push_rx) = mpsc::channel::<()>(1);
+    let pusher_handle = tokio::spawn(async move {
+        while let Some(_) = push_rx.recv().await {
+            // drain any pending requests that piled up while we were pushing
+            while let Ok(_) = push_rx.try_recv() {}
+            let _ = tokio::process::Command::new("git").args(["push"]).status().await;
+        }
+    });
 
     // scrape wallpaperflare with specific tags
     let flare_tags = vec![
@@ -36,13 +46,18 @@ async fn main() {
         let sem = dl_semaphore.clone();
         let mtx = md_mutex.clone();
         let tag = tag.to_string();
+        let tx = push_tx.clone();
         tasks.push(tokio::spawn(async move {
-            scrape_source("assets", "README.md", Some(&tag), u32::MAX, sem, mtx).await;
+            scrape_source("assets", "README.md", Some(&tag), u32::MAX, sem, mtx, tx).await;
         }));
     }
 
     // Wait for all tag scraping tasks to finish
     futures::future::join_all(tasks).await;
+
+    // Stop the background pusher and wait for any final push to finish
+    drop(push_tx);
+    let _ = pusher_handle.await;
 
     if std::env::var("GITHUB_ACTIONS").is_ok() {
         let _ = std::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status();
@@ -59,7 +74,8 @@ async fn scrape_source(
     search_query: Option<&str>,
     max_pages: u32,
     dl_semaphore: Arc<Semaphore>,
-    md_mutex: Arc<Mutex<()>>
+    md_mutex: Arc<Mutex<()>>,
+    push_tx: mpsc::Sender<()>
 ) {
     if let Some(q) = search_query {
         println!("\n--- starting {} (query: {}) ---", source_name, q);
@@ -227,9 +243,9 @@ async fn scrape_source(
                         let _ = std::process::Command::new("git")
                             .args(["commit", "-m", &format!("chore: archive {} page {} ({} new) [skip ci]", source_name, page, page_downloaded)])
                             .status();
-                        // fire-and-forget — push is read-only on local state, safe to run in background.
-                        // the final push at the end of main() acts as a fence for any stragglers.
-                        let _ = std::process::Command::new("git").args(["push"]).spawn();
+                        // queue a background push. the pusher task natively coalesces spam,
+                        // keeping it async for the scraper but safe for github's rate limits.
+                        let _ = push_tx.try_send(());
                     }
                 }
             }
@@ -247,7 +263,7 @@ async fn scrape_source(
         }
 
         page += 1;
-        // tiny politeness delay — just enough so skip-heavy pages don't blast cf
+        // tiny politeness delay. just enough so skip-heavy pages don't blast cf
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
     println!("\n=== {} done! downloaded: {}, failed: {} ===", source_name, total_downloaded, total_failed);
