@@ -1,0 +1,4 @@
+*.jpg binary -delta
+*.png binary -delta
+*.jpeg binary -delta
+assets/* binary -delta
