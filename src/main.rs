@@ -176,11 +176,18 @@ async fn scrape_source(
                             match dl_res {
                                 Ok(bytes) => return Ok((slug, ext, item, filename, bytes)),
                                 Err(e) => {
+                                    // don't retry permanent errors — size rejections etc are not transient
+                                    if e.contains("too large") || e.contains("write failed") {
+                                        println!("SKIPPED: {}", e);
+                                        let _ = std::fs::remove_file(&manifest_path);
+                                        return Err(());
+                                    }
                                     if dl_attempt < max_retries {
                                         print!("retry {}... ", dl_attempt + 1);
                                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                                     } else {
                                         println!("FAILED after {} attempts: {}", max_retries, e);
+                                        let _ = std::fs::remove_file(&manifest_path);
                                         return Err(());
                                     }
                                 }
@@ -220,7 +227,9 @@ async fn scrape_source(
                         let _ = std::process::Command::new("git")
                             .args(["commit", "-m", &format!("chore: archive {} page {} ({} new) [skip ci]", source_name, page, page_downloaded)])
                             .status();
-                        let _ = std::process::Command::new("git").args(["push"]).status();
+                        // fire-and-forget — push is read-only on local state, safe to run in background.
+                        // the final push at the end of main() acts as a fence for any stragglers.
+                        let _ = std::process::Command::new("git").args(["push"]).spawn();
                     }
                 }
             }
@@ -238,7 +247,8 @@ async fn scrape_source(
         }
 
         page += 1;
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // tiny politeness delay — just enough so skip-heavy pages don't blast cf
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
     println!("\n=== {} done! downloaded: {}, failed: {} ===", source_name, total_downloaded, total_failed);
 }
