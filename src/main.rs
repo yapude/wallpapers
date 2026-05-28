@@ -41,14 +41,23 @@ async fn main() {
         
     ];
 
+    let shared_client = match wallpaperflare::build_client() {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            println!("failed to build client: {}", e);
+            return;
+        }
+    };
+
     let mut tasks = Vec::new();
     for tag in flare_tags {
         let sem = dl_semaphore.clone();
         let mtx = md_mutex.clone();
         let tag = tag.to_string();
         let tx = push_tx.clone();
+        let client = shared_client.clone();
         tasks.push(tokio::spawn(async move {
-            scrape_source("assets", "README.md", Some(&tag), u32::MAX, sem, mtx, tx).await;
+            scrape_source(client, "assets", "README.md", Some(&tag), u32::MAX, sem, mtx, tx).await;
         }));
     }
 
@@ -69,6 +78,7 @@ async fn main() {
 }
 
 async fn scrape_source(
+    client: Arc<wreq::Client>,
     source_name: &str,
     md_file: &str,
     search_query: Option<&str>,
@@ -128,7 +138,7 @@ async fn scrape_source(
         let mut attempt = 0;
         let result = loop {
             attempt += 1;
-            let scrape_res = wallpaperflare::scrape_wallpaperflare(12, page, search_query).await;
+            let scrape_res = wallpaperflare::scrape_wallpaperflare(&client, 12, page, search_query).await;
 
             match scrape_res {
                 Ok(items) => break Ok(items),
@@ -168,6 +178,7 @@ async fn scrape_source(
                     let output_dir = output_dir.to_path_buf();
                     let max_retries = max_retries;
                     let sem = dl_semaphore.clone();
+                    let client = client.clone();
 
                     download_tasks.push(tokio::spawn(async move {
                         let _permit = sem.acquire().await.unwrap();
@@ -187,7 +198,7 @@ async fn scrape_source(
                         print!("  [dl] {} ... ", filename);
                         
                         for dl_attempt in 1..=max_retries {
-                            let dl_res = wallpaperflare::download_wallpaper(&item.download_url, &filepath).await;
+                            let dl_res = wallpaperflare::download_wallpaper(&client, &item.download_url, &filepath).await;
 
                             match dl_res {
                                 Ok(bytes) => return Ok((slug, ext, item, filename, bytes)),
