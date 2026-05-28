@@ -16,27 +16,7 @@ async fn main() {
     // Global limits and locks
     let dl_semaphore = Arc::new(Semaphore::new(30)); // max 30 concurrent downloads across all tags
     let md_mutex = Arc::new(Mutex::new(()));
-
-    // Background push coalescer to prevent git push spam/zombies
-    let (push_tx, mut push_rx) = mpsc::channel::<()>(1);
-    let pusher_handle = tokio::spawn(async move {
-        while let Some(_) = push_rx.recv().await {
-            // Wait a few seconds to let other scraper tasks finish their current pages and queue more signals
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            // Drain any pending requests that piled up while we were waiting/pushing
-            while let Ok(_) = push_rx.try_recv() {}
-            
-            if std::env::var("GITHUB_ACTIONS").is_ok() {
-                println!("[ci] batching commits and pushing...");
-                let _ = std::fs::remove_file(".git/index.lock");
-                let _ = tokio::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status().await;
-                let _ = tokio::process::Command::new("git")
-                    .args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"])
-                    .status().await;
-                let _ = tokio::process::Command::new("git").args(["push"]).status().await;
-            }
-        }
-    });
+    let unpushed_count = Arc::new(Mutex::new(0u32));
 /* tag storage
     "anime",
     "genshin impact",
@@ -110,20 +90,16 @@ async fn main() {
     for tag in flare_tags {
         let sem = dl_semaphore.clone();
         let mtx = md_mutex.clone();
+        let u_count = unpushed_count.clone();
         let tag = tag.to_string();
-        let tx = push_tx.clone();
         let client = shared_client.clone();
         tasks.push(tokio::spawn(async move {
-            scrape_source(client, "assets", "README.md", Some(&tag), u32::MAX, sem, mtx, tx).await;
+            scrape_source(client, "assets", "README.md", Some(&tag), u32::MAX, sem, mtx, u_count).await;
         }));
     }
 
     // Wait for all tag scraping tasks to finish
     futures::future::join_all(tasks).await;
-
-    // Stop the background pusher and wait for any final push to finish
-    drop(push_tx);
-    let _ = pusher_handle.await;
 
     if std::env::var("GITHUB_ACTIONS").is_ok() {
         let _ = std::fs::remove_file(".git/index.lock");
@@ -143,7 +119,7 @@ async fn scrape_source(
     max_pages: u32,
     dl_semaphore: Arc<Semaphore>,
     md_mutex: Arc<Mutex<()>>,
-    push_tx: mpsc::Sender<()>
+    unpushed_count: Arc<Mutex<u32>>
 ) {
     if let Some(q) = search_query {
         println!("\n--- starting {} (query: {}) ---", source_name, q);
@@ -306,10 +282,19 @@ async fn scrape_source(
                 if page_downloaded > 0 {
                     let _lock = md_mutex.lock().await;
                     append_to_readme(md_file, &new_readme_rows);
-                    if std::env::var("GITHUB_ACTIONS").is_ok() {
-                        // queue a background push. the pusher task natively coalesces spam,
-                        // keeping it async for the scraper but safe for github's rate limits.
-                        let _ = push_tx.try_send(());
+                    
+                    let mut count = unpushed_count.lock().await;
+                    *count += page_downloaded;
+                    
+                    if *count >= 300 {
+                        if std::env::var("GITHUB_ACTIONS").is_ok() {
+                            println!("[ci] reached {} unpushed images, batching commits and pushing...", *count);
+                            let _ = std::fs::remove_file(".git/index.lock");
+                            let _ = tokio::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status().await;
+                            let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"]).status().await;
+                            let _ = tokio::process::Command::new("git").args(["push"]).status().await;
+                        }
+                        *count = 0;
                     }
                 }
             }
