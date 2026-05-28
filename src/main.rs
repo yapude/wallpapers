@@ -21,9 +21,19 @@ async fn main() {
     let (push_tx, mut push_rx) = mpsc::channel::<()>(1);
     let pusher_handle = tokio::spawn(async move {
         while let Some(_) = push_rx.recv().await {
-            // drain any pending requests that piled up while we were pushing
+            // Wait a few seconds to let other scraper tasks finish their current pages and queue more signals
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            // Drain any pending requests that piled up while we were waiting/pushing
             while let Ok(_) = push_rx.try_recv() {}
-            let _ = tokio::process::Command::new("git").args(["push"]).status().await;
+            
+            if std::env::var("GITHUB_ACTIONS").is_ok() {
+                println!("[ci] batching commits and pushing...");
+                let _ = tokio::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status().await;
+                let _ = tokio::process::Command::new("git")
+                    .args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"])
+                    .status().await;
+                let _ = tokio::process::Command::new("git").args(["push"]).status().await;
+            }
         }
     });
 
@@ -69,9 +79,9 @@ async fn main() {
     let _ = pusher_handle.await;
 
     if std::env::var("GITHUB_ACTIONS").is_ok() {
-        let _ = std::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status();
-        let _ = std::process::Command::new("git").args(["commit", "-m", "chore: sort readme alphabetically [skip ci]"]).status();
-        let _ = std::process::Command::new("git").args(["push"]).status();
+        let _ = tokio::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status().await;
+        let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: sort readme alphabetically [skip ci]"]).status().await;
+        let _ = tokio::process::Command::new("git").args(["push"]).status().await;
     }
 
     println!("=== all scraping complete! ===");
@@ -249,11 +259,6 @@ async fn scrape_source(
                     let _lock = md_mutex.lock().await;
                     append_to_readme(md_file, &new_readme_rows);
                     if std::env::var("GITHUB_ACTIONS").is_ok() {
-                        println!("[ci] committing progress for {} page {}...", source_name, page);
-                        let _ = std::process::Command::new("git").args(["add", "--sparse", md_file, source_name]).status();
-                        let _ = std::process::Command::new("git")
-                            .args(["commit", "-m", &format!("chore: archive {} page {} ({} new) [skip ci]", source_name, page, page_downloaded)])
-                            .status();
                         // queue a background push. the pusher task natively coalesces spam,
                         // keeping it async for the scraper but safe for github's rate limits.
                         let _ = push_tx.try_send(());
@@ -275,7 +280,7 @@ async fn scrape_source(
 
         page += 1;
         // tiny politeness delay. just enough so skip-heavy pages don't blast cf
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     println!("\n=== {} done! downloaded: {}, failed: {} ===", source_name, total_downloaded, total_failed);
 }
