@@ -36,19 +36,65 @@ async fn main() {
             }
         }
     });
+/* tag storage
+    "anime",
+    "genshin impact",
+    "wuthering waves",
+    "artwork",
+    "space",
+    "anime sexy",
+    "blue archive",
+    "video games",
+    "ecchi",
+-----------------------
+ 
 
+*/
     // scrape wallpaperflare with specific tags
     let flare_tags = vec![
-        "anime",
-        "genshin impact",
-        "wuthering waves",
-        "artwork",
+        "night",
+        "city",
+        "architecture",
+        "landscape",
+        "nature",
         "space",
-        "anime sexy",
-        "blue archive",
-        "video games",
-        "ecchi",
-        
+        "fantasy art",
+        "honkai star rail",
+        "zenless zone zero",
+        "arknights",
+        "artistic",
+        "water",
+        "sky",
+        "river",
+        "art",
+        "trees",
+        "minecraft",
+        "painting",
+        "clouds",
+        "beauty in nature",
+        "tree",
+        "plant",
+        "scenics - nature",
+        "oil on canvas",
+        "tranquility",
+        "outside",
+        "tranquil scene",
+        "country",
+        "countryside",
+        "day",
+        "land",
+        "forest",
+        "cloud - sky",
+        "mountains",
+        "mountain",
+        "artistry",
+        "reflections",
+        "lake",
+        "scenic",
+        "non-urban scene",
+        "environment",
+        "people",
+        "loli",
     ];
 
     let shared_client = match wallpaperflare::build_client() {
