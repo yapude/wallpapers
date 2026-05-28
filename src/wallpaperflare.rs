@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::wallpapersclan::WallpaperEntry;
 
-fn build_client() -> Result<wreq::Client, String> {
+pub fn build_client() -> Result<wreq::Client, String> {
     use wreq::header::{HeaderMap, HeaderValue};
     let mut headers = HeaderMap::new();
     headers.insert("accept", HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
@@ -60,6 +60,7 @@ pub fn pick_image_source(value: &str) -> String {
 }
 
 pub async fn scrape_wallpaperflare(
+    client: &wreq::Client,
     limit: usize,
     page: u32,
     search_query: Option<&str>,
@@ -68,8 +69,6 @@ pub async fn scrape_wallpaperflare(
         "[scraper:wallpaperflare] starting scrape - page: {}, limit: {}",
         page, limit
     );
-    
-    let client = build_client()?;
 
     let url = if let Some(query) = search_query {
         let q = query.replace(" ", "+");
@@ -332,10 +331,8 @@ pub async fn resolve_wallpaperflare_download(
     }
 }
 
-pub async fn download_wallpaper(url: &str, path: &Path) -> Result<u64, String> {
+pub async fn download_wallpaper(client: &wreq::Client, url: &str, path: &Path) -> Result<u64, String> {
     const MAX_FILE_SIZE: u64 = 30 * 1024 * 1024;
-
-    let client = build_client()?;
 
     let response = client
         .get(url)
