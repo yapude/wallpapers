@@ -34,6 +34,7 @@ async fn main() {
     // scrape wallpaperflare with specific tags
     let flare_tags = vec![
         "night",
+        "graphics",
         "city",
         "architecture",
         "landscape",
