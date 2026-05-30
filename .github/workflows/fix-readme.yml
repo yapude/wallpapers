@@ -27,15 +27,13 @@ jobs:
           python3 -c '
           import os
           import json
-          import glob
-
+          import subprocess
+          
           header = "# Wallpaper Archive\n\nAutomated archive of wallpapers to bypass Cloudflare and prevent dead links.\n\n## Gallery\n\n| Preview | Title | Tags |\n| --- | --- | --- |\n"
           
           rows = []
           count = 0
           
-          # get all json files from git index, bypassing sparse checkout issues
-          import subprocess
           git_files = subprocess.check_output(["git", "ls-files", "assets/*.json"], text=True).splitlines()
           
           for filepath in git_files:
@@ -43,22 +41,20 @@ jobs:
                   content = subprocess.check_output(["git", "show", f"HEAD:{filepath}"], text=True)
                   item = json.loads(content)
                   
-                  # determine extension
                   ext = "png" if ".png" in item.get("download_url", "") else "jpg"
                   item_id = item.get("id", "")
                   filename = f"{item_id}.{ext}"
                   cdn_url = f"https://cdn.colorwall.xyz/{filename}"
-                      
-                      title = item.get("title", "Wallpaper")
-                      tags = ", ".join(item.get("tags", []))
-                      
-                      row = f"| <img src=\"{cdn_url}\" width=\"200\"> | **{title}**<br>[Download]({cdn_url}) | {tags} |\n"
-                      rows.append((item.get("id", ""), row))
-                      count += 1
-                  except Exception as e:
-                      pass
+                  
+                  title = item.get("title", "Wallpaper")
+                  tags = ", ".join(item.get("tags", []))
+                  
+                  row = f"| <img src=\"{cdn_url}\" width=\"200\"> | **{title}**<br>[Download]({cdn_url}) | {tags} |\n"
+                  rows.append((item_id, row))
+                  count += 1
+              except Exception as e:
+                  pass
           
-          # sort alphabetically by id to keep it consistent
           rows.sort(key=lambda x: x[0])
           
           with open("README.md", "w", encoding="utf-8") as f:
