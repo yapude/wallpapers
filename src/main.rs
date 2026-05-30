@@ -293,7 +293,7 @@ async fn scrape_source(
                         break Err(e);
                     }
                     let wait = attempt * 5;
-                    println!("[retry] {} page {} attempt {}/{} failed: {} — waiting {}s...", source_name, page, attempt, max_retries, e, wait);
+                    // println!("[retry] {} page {} attempt {}/{} failed: {} — waiting {}s...", source_name, page, attempt, max_retries, e, wait);
                     tokio::time::sleep(std::time::Duration::from_secs(wait as u64)).await;
                 }
             }
@@ -304,7 +304,7 @@ async fn scrape_source(
                 consecutive_errors = 0;
 
                 if items.is_empty() {
-                    println!("[{}] exhausted at page {}", tag_label, page);
+                    // println!("[{}] exhausted at page {}", tag_label, page);
                     break;
                 }
                 let mut page_downloaded = 0;
