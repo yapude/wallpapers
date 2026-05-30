@@ -65,10 +65,10 @@ pub async fn scrape_wallpaperflare(
     page: u32,
     search_query: Option<&str>,
 ) -> Result<Vec<WallpaperEntry>, String> {
-    println!(
-        "[scraper:wallpaperflare] starting scrape - page: {}, limit: {}",
-        page, limit
-    );
+    // println!(
+    //     "[scraper:wallpaperflare] starting scrape - page: {}, limit: {}",
+    //     page, limit
+    // );
 
     let url = if let Some(query) = search_query {
         let q = query.replace(" ", "+");
@@ -85,7 +85,7 @@ pub async fn scrape_wallpaperflare(
         }
     };
 
-    println!("[scraper:wallpaperflare] fetching: {}", url);
+    // println!("[scraper:wallpaperflare] fetching: {}", url);
 
     let response = client
         .get(&url)
@@ -104,7 +104,7 @@ pub async fn scrape_wallpaperflare(
     let html = response.text().await.map_err(|e| e.to_string())?;
     
     if html.contains("cf-browser-verification") || html.contains("Checking your browser") {
-        println!("[scraper:wallpaperflare] cloudflare challenge detected!");
+        // println!("[scraper:wallpaperflare] cloudflare challenge detected!");
         return Err("cloudflare challenge - browser verification required".to_string());
     }
 
@@ -201,14 +201,14 @@ pub async fn scrape_wallpaperflare(
     }
 
     if temp_items.is_empty() {
-        println!("[scraper:wallpaperflare] no items found");
+        // println!("[scraper:wallpaperflare] no items found");
         return Err("wallpaperflare returned no results".to_string());
     }
 
-    println!(
-        "[scraper:wallpaperflare] collected {} items, resolving download urls...",
-        temp_items.len()
-    );
+    // println!(
+    //     "[scraper:wallpaperflare] collected {} items, resolving download urls...",
+    //     temp_items.len()
+    // );
 
     let mut handles = Vec::new();
     for (id, title, thumb, detail_url, tags) in temp_items {
@@ -228,7 +228,7 @@ pub async fn scrape_wallpaperflare(
                 let download_url = match download_result {
                     Ok(url) => url,
                     Err(e) => {
-                        println!("  [warn] failed to resolve {}: {}", id, e);
+                        // println!("  [warn] failed to resolve {}: {}", id, e);
                         thumbnail_url.clone()
                     }
                 };
@@ -242,13 +242,13 @@ pub async fn scrape_wallpaperflare(
                     tags,
                 });
             }
-            Err(e) => {
-                println!("  [warn] task failed: {}", e);
+            Err(_e) => {
+                // println!("  [warn] task failed: {}", e);
             }
         }
     }
 
-    println!("[scraper:wallpaperflare] resolved {} download urls", items.len());
+    // println!("[scraper:wallpaperflare] resolved {} download urls", items.len());
     Ok(items)
 }
 
