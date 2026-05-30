@@ -7,7 +7,66 @@ use std::path::Path;
 const CDN_BASE: &str = "https://raw.githubusercontent.com/yapude/wallpapers/main/assets";
 
 use std::sync::Arc;
-use tokio::sync::{Mutex, Semaphore, mpsc};
+use std::sync::atomic::{AtomicU32, Ordering};
+use tokio::sync::{Mutex, Semaphore};
+
+// global stats that all tasks can update without locking
+struct Stats {
+    downloaded: AtomicU32,
+    skipped: AtomicU32,
+    failed: AtomicU32,
+    pushed: AtomicU32,
+}
+
+impl Stats {
+    fn new() -> Self {
+        Self {
+            downloaded: AtomicU32::new(0),
+            skipped: AtomicU32::new(0),
+            failed: AtomicU32::new(0),
+            pushed: AtomicU32::new(0),
+        }
+    }
+}
+
+// get disk usage stats for the runner
+fn get_disk_usage() -> String {
+    let output_dir = Path::new("assets");
+    let mut total_bytes: u64 = 0;
+    let mut file_count: u64 = 0;
+    if let Ok(entries) = std::fs::read_dir(output_dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total_bytes += meta.len();
+                    file_count += 1;
+                }
+            }
+        }
+    }
+    let mb = total_bytes / (1024 * 1024);
+    format!("{}MB across {} files", mb, file_count)
+}
+
+fn get_readme_lines(md_file: &str) -> usize {
+    std::fs::read_to_string(md_file)
+        .map(|c| c.lines().count())
+        .unwrap_or(0)
+}
+
+// print a compact stats dashboard
+fn print_stats(stats: &Stats, md_file: &str) {
+    let dl = stats.downloaded.load(Ordering::Relaxed);
+    let skip = stats.skipped.load(Ordering::Relaxed);
+    let fail = stats.failed.load(Ordering::Relaxed);
+    let pushes = stats.pushed.load(Ordering::Relaxed);
+    let readme_lines = get_readme_lines(md_file);
+    let disk = get_disk_usage();
+    println!(
+        "[stats] downloaded: {} | skipped: {} | failed: {} | pushes: {} | readme: {} lines | local disk: {}",
+        dl, skip, fail, pushes, readme_lines, disk
+    );
+}
 
 #[tokio::main]
 async fn main() {
@@ -17,6 +76,7 @@ async fn main() {
     let dl_semaphore = Arc::new(Semaphore::new(30)); // max 30 concurrent downloads across all tags
     let md_mutex = Arc::new(Mutex::new(()));
     let unpushed_count = Arc::new(Mutex::new(0u32));
+    let stats = Arc::new(Stats::new());
 /* tag storage
     "anime",
     "genshin impact",
@@ -26,7 +86,6 @@ async fn main() {
     "anime sexy",
     "blue archive",
     "video games",
-    "ecchi",
 -----------------------
  
 
@@ -78,7 +137,7 @@ async fn main() {
         "people",
         "loli",
         "anime girls",
-        "gun",
+        "ecchi",
         "school uniform",
         "Houkai Gakuen",
         "Kiana Kaslana",
@@ -154,10 +213,11 @@ async fn main() {
         let sem = dl_semaphore.clone();
         let mtx = md_mutex.clone();
         let u_count = unpushed_count.clone();
+        let s = stats.clone();
         let tag = tag.to_string();
         let client = shared_client.clone();
         tasks.push(tokio::spawn(async move {
-            scrape_source(client, "assets", "README.md", Some(&tag), u32::MAX, sem, mtx, u_count).await;
+            scrape_source(client, "assets", "README.md", Some(&tag), u32::MAX, sem, mtx, u_count, s).await;
         }));
     }
 
@@ -182,13 +242,10 @@ async fn scrape_source(
     max_pages: u32,
     dl_semaphore: Arc<Semaphore>,
     md_mutex: Arc<Mutex<()>>,
-    unpushed_count: Arc<Mutex<u32>>
+    unpushed_count: Arc<Mutex<u32>>,
+    stats: Arc<Stats>
 ) {
-    if let Some(q) = search_query {
-        println!("\n--- starting {} (query: {}) ---", source_name, q);
-    } else {
-        println!("\n--- starting {} ---", source_name);
-    }
+    let tag_label = search_query.unwrap_or("all");
     let output_dir = Path::new(source_name);
     if !output_dir.exists() {
         std::fs::create_dir_all(output_dir).unwrap_or(());
@@ -198,7 +255,6 @@ async fn scrape_source(
         let _lock = md_mutex.lock().await;
         load_existing_ids(source_name, md_file)
     };
-    println!("found {} already-archived wallpapers for {} in {}", existing_ids.len(), source_name, md_file);
 
     {
         let _lock = md_mutex.lock().await;
@@ -222,14 +278,7 @@ async fn scrape_source(
 
     loop {
         if page > max_pages {
-            println!("reached max_pages ({}) for this run, stopping.", max_pages);
             break;
-        }
-
-        if let Some(q) = search_query {
-            println!("\n--- {} (query: {}) page {} ---", source_name, q, page);
-        } else {
-            println!("\n--- {} page {} ---", source_name, page);
         }
 
         let mut attempt = 0;
@@ -255,11 +304,9 @@ async fn scrape_source(
                 consecutive_errors = 0;
 
                 if items.is_empty() {
-                    println!("no more items found for {}! reached the end at page {}.", source_name, page);
+                    println!("[{}] exhausted at page {}", tag_label, page);
                     break;
                 }
-
-                println!("found {} items on {} page {}", items.len(), source_name, page);
                 let mut page_downloaded = 0;
                 let mut new_readme_rows = String::new();
 
@@ -267,7 +314,7 @@ async fn scrape_source(
                 for item in items {
                     let slug = item.id.clone();
                     if existing_ids.contains(&slug) {
-                        println!("  [skip] {} (already archived)", slug);
+                        stats.skipped.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
                     existing_ids.insert(slug.clone());
@@ -292,7 +339,7 @@ async fn scrape_source(
                             let _ = std::fs::write(&manifest_path, json);
                         }
 
-                        print!("  [dl] {} ... ", filename);
+                        // silent download — stats printed per batch
                         
                         for dl_attempt in 1..=max_retries {
                             let dl_res = wallpaperflare::download_wallpaper(&client, &item.download_url, &filepath).await;
@@ -302,15 +349,13 @@ async fn scrape_source(
                                 Err(e) => {
                                     // don't retry permanent errors — size rejections etc are not transient
                                     if e.contains("too large") || e.contains("write failed") {
-                                        println!("SKIPPED: {}", e);
+                                        // permanent error, skip silently
                                         let _ = std::fs::remove_file(&manifest_path);
                                         return Err(());
                                     }
                                     if dl_attempt < max_retries {
-                                        print!("retry {}... ", dl_attempt + 1);
                                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                                     } else {
-                                        println!("FAILED after {} attempts: {}", max_retries, e);
                                         let _ = std::fs::remove_file(&manifest_path);
                                         return Err(());
                                     }
@@ -324,11 +369,9 @@ async fn scrape_source(
                 let results = futures::future::join_all(download_tasks).await;
                 
                 for res in results {
-                    if let Ok(Ok((_, _, item, filename, bytes))) = res {
-                        if bytes > 0 {
-                            println!("ok ({} KB)", bytes / 1024);
-                        }
+                    if let Ok(Ok((_, _, item, filename, _bytes))) = res {
                         total_downloaded += 1;
+                        stats.downloaded.fetch_add(1, Ordering::Relaxed);
                         page_downloaded += 1;
 
                         let cdn_url = format!("{}/{}", CDN_BASE, filename);
@@ -339,6 +382,7 @@ async fn scrape_source(
                         ));
                     } else {
                         total_failed += 1;
+                        stats.failed.fetch_add(1, Ordering::Relaxed);
                     }
                 }
 
@@ -351,11 +395,28 @@ async fn scrape_source(
                     
                     if *count >= 300 {
                         if std::env::var("GITHUB_ACTIONS").is_ok() {
-                            println!("[ci] reached {} unpushed images, batching commits and pushing...", *count);
+                            println!("[push] committing batch of {} images...", *count);
                             let _ = std::fs::remove_file(".git/index.lock");
                             let _ = tokio::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status().await;
                             let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"]).status().await;
-                            let _ = tokio::process::Command::new("git").args(["push"]).status().await;
+                            let push_status = tokio::process::Command::new("git").args(["push"]).status().await;
+                            
+                            if let Ok(s) = push_status {
+                                if s.success() {
+                                    stats.pushed.fetch_add(1, Ordering::Relaxed);
+                                    println!("[push] success! cleaning up local assets to free disk...");
+                                    // nuke local image files after push to free disk space
+                                    // keep readme and .git intact obviously
+                                    if let Ok(entries) = std::fs::read_dir("assets") {
+                                        for entry in entries.flatten() {
+                                            let _ = std::fs::remove_file(entry.path());
+                                        }
+                                    }
+                                    print_stats(&stats, md_file);
+                                } else {
+                                    println!("[push] failed! keeping local files for retry");
+                                }
+                            }
                         }
                         *count = 0;
                     }
@@ -363,22 +424,19 @@ async fn scrape_source(
             }
             Err(e) => {
                 consecutive_errors += 1;
-                println!("error scraping {} page {} after {} retries: {}", source_name, page, max_retries, e);
+                println!("[error] {} page {} failed after retries: {}", tag_label, page, e);
 
                 if consecutive_errors >= 5 {
-                    println!("too many consecutive failures ({}), halting.", consecutive_errors);
+                    println!("[halt] {} — too many consecutive failures", tag_label);
                     break;
                 }
-
-                println!("skipping page {} and continuing...", page);
             }
         }
 
         page += 1;
-        // tiny politeness delay. just enough so skip-heavy pages don't blast cf
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    println!("\n=== {} done! downloaded: {}, failed: {} ===", source_name, total_downloaded, total_failed);
+    println!("[done] {} — downloaded: {}, failed: {}", tag_label, total_downloaded, total_failed);
 }
 
 fn load_existing_ids(source_name: &str, md_file: &str) -> HashSet<String> {
@@ -407,7 +465,6 @@ fn append_to_readme(md_file: &str, rows: &str) {
         let trimmed = existing.trim_end();
         let new_content = format!("{}\n{}", trimmed, rows);
         let _ = std::fs::write(md_file, new_content);
-        println!("appended {} new entries to {}", rows.lines().count(), md_file);
     }
 }
 
