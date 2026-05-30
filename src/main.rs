@@ -226,7 +226,7 @@ async fn main() {
 
     if std::env::var("GITHUB_ACTIONS").is_ok() {
         let _ = std::fs::remove_file(".git/index.lock");
-        let _ = tokio::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status().await;
+        let _ = tokio::process::Command::new("git").args(["add", "--ignore-removal", "--sparse", "README.md", "assets"]).status().await;
         let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: sort readme alphabetically [skip ci]"]).status().await;
         let _ = tokio::process::Command::new("git").args(["push"]).status().await;
     }
@@ -397,7 +397,7 @@ async fn scrape_source(
                         if std::env::var("GITHUB_ACTIONS").is_ok() {
                             println!("[push] committing batch of {} images...", *count);
                             let _ = std::fs::remove_file(".git/index.lock");
-                            let _ = tokio::process::Command::new("git").args(["add", "--sparse", "README.md", "assets"]).status().await;
+                            let _ = tokio::process::Command::new("git").args(["add", "--ignore-removal", "--sparse", "README.md", "assets"]).status().await;
                             let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"]).status().await;
                             let push_status = tokio::process::Command::new("git").args(["push"]).status().await;
                             
