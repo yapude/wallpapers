@@ -39,7 +39,8 @@ jobs:
                       item = json.load(f)
                       # determine extension
                       ext = "png" if ".png" in item.get("download_url", "") else "jpg"
-                      filename = f"{item[\"id\"]}.{ext}"
+                      item_id = item.get("id", "")
+                      filename = f"{item_id}.{ext}"
                       cdn_url = f"https://cdn.colorwall.xyz/{filename}"
                       
                       title = item.get("title", "Wallpaper")
