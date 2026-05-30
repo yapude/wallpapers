@@ -33,15 +33,21 @@ jobs:
           
           rows = []
           count = 0
-          for json_file in glob.glob("assets/*.json"):
-              with open(json_file, "r", encoding="utf-8") as f:
-                  try:
-                      item = json.load(f)
-                      # determine extension
-                      ext = "png" if ".png" in item.get("download_url", "") else "jpg"
-                      item_id = item.get("id", "")
-                      filename = f"{item_id}.{ext}"
-                      cdn_url = f"https://cdn.colorwall.xyz/{filename}"
+          
+          # get all json files from git index, bypassing sparse checkout issues
+          import subprocess
+          git_files = subprocess.check_output(["git", "ls-files", "assets/*.json"], text=True).splitlines()
+          
+          for filepath in git_files:
+              try:
+                  content = subprocess.check_output(["git", "show", f"HEAD:{filepath}"], text=True)
+                  item = json.loads(content)
+                  
+                  # determine extension
+                  ext = "png" if ".png" in item.get("download_url", "") else "jpg"
+                  item_id = item.get("id", "")
+                  filename = f"{item_id}.{ext}"
+                  cdn_url = f"https://cdn.colorwall.xyz/{filename}"
                       
                       title = item.get("title", "Wallpaper")
                       tags = ", ".join(item.get("tags", []))
