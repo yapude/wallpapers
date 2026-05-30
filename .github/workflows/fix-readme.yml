@@ -10,12 +10,14 @@ jobs:
   fix:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (sparse - readme only)
+      - name: Checkout (sparse - readme + json metadata only)
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
             README.md
+            assets/*.json
           sparse-checkout-cone-mode: false
+          fetch-depth: 1
 
       - name: Configure Git
         run: |
@@ -24,48 +26,47 @@ jobs:
 
       - name: Rebuild README from JSON metadata
         run: |
-          python3 -c '
-          import os
-          import json
-          import subprocess
-          
+          python3 << 'PYEOF'
+          import os, json, glob
+
+          CDN_BASE = "https://raw.githubusercontent.com/yapude/wallpapers/main/assets"
+
           header = "# Wallpaper Archive\n\nAutomated archive of wallpapers to bypass Cloudflare and prevent dead links.\n\n## Gallery\n\n| Preview | Title | Tags |\n| --- | --- | --- |\n"
-          
+
           rows = []
           count = 0
-          
-          git_files = subprocess.check_output(["git", "ls-files", "assets/*.json"], text=True).splitlines()
-          
-          for filepath in git_files:
+          errors = 0
+
+          for json_file in sorted(glob.glob("assets/*.json")):
               try:
-                  content = subprocess.check_output(["git", "show", f"HEAD:{filepath}"], text=True)
-                  item = json.loads(content)
-                  
+                  with open(json_file, "r", encoding="utf-8") as f:
+                      item = json.load(f)
+
                   ext = "png" if ".png" in item.get("download_url", "") else "jpg"
                   item_id = item.get("id", "")
                   filename = f"{item_id}.{ext}"
-                  cdn_url = f"https://raw.githubusercontent.com/yapude/wallpapers/main/assets/{filename}"
-                  
+                  cdn_url = f"{CDN_BASE}/{filename}"
+
                   title = item.get("title", "Wallpaper")
                   tags = ", ".join(item.get("tags", []))
-                  
-                  row = f"| <img src=\"{cdn_url}\" width=\"200\"> | **{title}**<br>[Download]({cdn_url}) | {tags} |\n"
+
+                  row = f'| <img src="{cdn_url}" width="200"> | **{title}**<br>[Download]({cdn_url}) | {tags} |\n'
                   rows.append((item_id, row))
                   count += 1
               except Exception as e:
-                  pass
-          
+                  errors += 1
+
           rows.sort(key=lambda x: x[0])
-          
+
           with open("README.md", "w", encoding="utf-8") as f:
               f.write(header)
               for _, row in rows:
                   f.write(row)
-                  
-          print(f"Rebuilt README with {count} wallpapers!")
-          '
+
+          print(f"Rebuilt README with {count} wallpapers ({errors} errors)")
+          PYEOF
 
       - name: Commit and Push
         run: |
           git add --sparse README.md
-          git diff --cached --quiet && echo "no changes" || (git commit -m "fix: perfectly rebuild readme from archive metadata [skip ci]" && git push)
+          git diff --cached --quiet && echo "no changes" || (git commit -m "fix: rebuild readme from archive metadata [skip ci]" && git push)
