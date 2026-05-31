@@ -233,7 +233,7 @@ async fn main() {
         // let _ = tokio::process::Command::new("git").args(["push"])
         //     .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
         let _ = tokio::process::Command::new("git").args(["push"]).status().await;
-    }
+    }   
 
     println!("=== all scraping complete! ===");
 }
@@ -267,9 +267,14 @@ async fn scrape_source(
             let _ = std::fs::write(md_file, header);
         } else {
             // make sure the table header exists in the file
-            let content = std::fs::read_to_string(md_file).unwrap_or_default();
-            if !content.contains("| --- | --- | --- |") {
-                let _ = std::fs::write(md_file, format!("{}{}", header, content));
+            // DANGER: never use unwrap_or_default() here! if read_to_string fails due to OOM, 
+            // it will return "" and completely overwrite the 100k line file with just the header!
+            if let Ok(content) = std::fs::read_to_string(md_file) {
+                if !content.contains("| --- | --- | --- |") {
+                    let _ = std::fs::write(md_file, format!("{}{}", header, content));
+                }
+            } else {
+                println!("[warn] failed to read {} to check header, skipping injection", md_file);
             }
         }
     }
@@ -410,7 +415,7 @@ async fn scrape_source(
                             let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"])
                                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
                             let push_status = tokio::process::Command::new("git").args(["push"])
-                                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
+                                .status().await;
                             
                             if let Ok(s) = push_status {
                                 if s.success() {
