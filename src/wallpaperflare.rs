@@ -98,7 +98,7 @@ pub async fn scrape_wallpaperflare(
 
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("http {} - possibly cloudflare blocked", status));
+        return Err(format!("http {}", status));
     }
 
     let html = response.text().await.map_err(|e| e.to_string())?;
