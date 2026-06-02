@@ -63,7 +63,7 @@ fn print_stats(stats: &Stats, md_file: &str) {
     let readme_lines = get_readme_lines(md_file);
     let disk = get_disk_usage();
     println!(
-        "[stats] downloaded: {} | skipped: {} | failed: {} | pushes: {} | readme: {} lines | local disk: {}",
+        "[stats] downloaded: {} | skipped: {} | failed: {} | pushes: {} | active readme: {} lines | local disk: {}",
         dl, skip, fail, pushes, readme_lines, disk
     );
 }
@@ -217,7 +217,7 @@ async fn main() {
         let tag = tag.to_string();
         let client = shared_client.clone();
         tasks.push(tokio::spawn(async move {
-            scrape_source(client, "assets", "README.md", Some(&tag), u32::MAX, sem, mtx, u_count, s).await;
+            scrape_source(client, "assets", &["README.md", "README2.md"], "README2.md", Some(&tag), u32::MAX, sem, mtx, u_count, s).await;
         }));
     }
 
@@ -226,7 +226,7 @@ async fn main() {
 
     if std::env::var("GITHUB_ACTIONS").is_ok() {
         let _ = std::fs::remove_file(".git/index.lock");
-        let _ = tokio::process::Command::new("git").args(["add", "--ignore-removal", "--sparse", "README.md", "assets"])
+        let _ = tokio::process::Command::new("git").args(["add", "--ignore-removal", "--sparse", "README.md", "README2.md", "assets"])
             .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
         let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: sort readme alphabetically [skip ci]"])
             .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
@@ -241,7 +241,8 @@ async fn main() {
 async fn scrape_source(
     client: Arc<wreq::Client>,
     source_name: &str,
-    md_file: &str,
+    read_md_files: &[&str],
+    write_md_file: &str,
     search_query: Option<&str>,
     max_pages: u32,
     dl_semaphore: Arc<Semaphore>,
@@ -257,24 +258,24 @@ async fn scrape_source(
 
     let mut existing_ids = {
         let _lock = md_mutex.lock().await;
-        load_existing_ids(source_name, md_file)
+        load_existing_ids(source_name, read_md_files)
     };
 
     {
         let _lock = md_mutex.lock().await;
         let header = "# Wallpaper Archive\n\nAutomated archive of wallpapers to bypass Cloudflare and prevent dead links.\n\n## Gallery\n\n| Preview | Title | Tags |\n| --- | --- | --- |\n";
-        if !Path::new(md_file).exists() {
-            let _ = std::fs::write(md_file, header);
+        if !Path::new(write_md_file).exists() {
+            let _ = std::fs::write(write_md_file, header);
         } else {
             // make sure the table header exists in the file
             // DANGER: never use unwrap_or_default() here! if read_to_string fails due to OOM, 
             // it will return "" and completely overwrite the 100k line file with just the header!
-            if let Ok(content) = std::fs::read_to_string(md_file) {
+            if let Ok(content) = std::fs::read_to_string(write_md_file) {
                 if !content.contains("| --- | --- | --- |") {
-                    let _ = std::fs::write(md_file, format!("{}{}", header, content));
+                    let _ = std::fs::write(write_md_file, format!("{}{}", header, content));
                 }
             } else {
-                println!("[warn] failed to read {} to check header, skipping injection", md_file);
+                println!("[warn] failed to read {} to check header, skipping injection", write_md_file);
             }
         }
     }
@@ -397,7 +398,7 @@ async fn scrape_source(
 
                 if page_downloaded > 0 {
                     let _lock = md_mutex.lock().await;
-                    append_to_readme(md_file, &new_readme_rows);
+                    append_to_readme(write_md_file, &new_readme_rows);
                     
                     let mut count = unpushed_count.lock().await;
                     *count += page_downloaded;
@@ -410,7 +411,7 @@ async fn scrape_source(
                             let _freeze = dl_semaphore.acquire_many(30).await.unwrap();
                             
                             let _ = std::fs::remove_file(".git/index.lock");
-                            let _ = tokio::process::Command::new("git").args(["add", "--ignore-removal", "--sparse", "README.md", "assets"])
+                            let _ = tokio::process::Command::new("git").args(["add", "--ignore-removal", "--sparse", "README.md", "README2.md", "assets"])
                                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
                             let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"])
                                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
@@ -428,7 +429,7 @@ async fn scrape_source(
                                             let _ = std::fs::remove_file(entry.path());
                                         }
                                     }
-                                    print_stats(&stats, md_file);
+                                    print_stats(&stats, write_md_file);
                                 } else {
                                     println!("[push] failed! keeping local files for retry");
                                 }
@@ -455,17 +456,19 @@ async fn scrape_source(
     println!("[done] {} — downloaded: {}, failed: {}", tag_label, total_downloaded, total_failed);
 }
 
-fn load_existing_ids(source_name: &str, md_file: &str) -> HashSet<String> {
+fn load_existing_ids(source_name: &str, md_files: &[&str]) -> HashSet<String> {
     let mut ids = HashSet::new();
-    if let Ok(content) = std::fs::read_to_string(md_file) {
-        for line in content.lines() {
-            let search_str = format!("/{}/", source_name);
-            if let Some(start) = line.find(&search_str) {
-                let after = &line[start + search_str.len()..];
-                if let Some(dot) = after.find('.') {
-                    let slug = &after[..dot];
-                    if !slug.is_empty() {
-                        ids.insert(slug.to_string());
+    for md_file in md_files {
+        if let Ok(content) = std::fs::read_to_string(md_file) {
+            for line in content.lines() {
+                let search_str = format!("/{}/", source_name);
+                if let Some(start) = line.find(&search_str) {
+                    let after = &line[start + search_str.len()..];
+                    if let Some(dot) = after.find('.') {
+                        let slug = &after[..dot];
+                        if !slug.is_empty() {
+                            ids.insert(slug.to_string());
+                        }
                     }
                 }
             }
