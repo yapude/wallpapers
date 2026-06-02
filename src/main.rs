@@ -232,7 +232,7 @@ async fn main() {
             .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
         // let _ = tokio::process::Command::new("git").args(["push"])
         //     .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
-        let _ = tokio::process::Command::new("git").args(["push"]).status().await;
+        let _ = tokio::process::Command::new("git").args(["-c", "http.postBuffer=524288000", "push"]).status().await;
     }   
 
     println!("=== all scraping complete! ===");
@@ -402,7 +402,7 @@ async fn scrape_source(
                     let mut count = unpushed_count.lock().await;
                     *count += page_downloaded;
                     
-                    if *count >= 300 {
+                    if *count >= 50 {
                         if std::env::var("GITHUB_ACTIONS").is_ok() {
                             println!("[push] freezing downloads to commit batch of {} images...", *count);
                             // acquire all 30 permits to absolutely guarantee NO other tags are downloading
@@ -414,7 +414,7 @@ async fn scrape_source(
                                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
                             let _ = tokio::process::Command::new("git").args(["commit", "-m", "chore: archive batch of new wallpapers [skip ci]"])
                                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().await;
-                            let push_status = tokio::process::Command::new("git").args(["push"])
+                            let push_status = tokio::process::Command::new("git").args(["-c", "http.postBuffer=524288000", "push"])
                                 .status().await;
                             
                             if let Ok(s) = push_status {
