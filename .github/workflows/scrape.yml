@@ -25,6 +25,7 @@ jobs:
             .gitignore
             LICENSE
             README.md
+            README2.md
           sparse-checkout-cone-mode: false
 
       - name: Setup Rust
